@@ -294,9 +294,13 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 ```
 
 That registers a single task named `ASUSeatWatcher` that fires every 15
-minutes for the next 10 years. Verify the actual repetition config (the
-`NextRunTime` field in `Get-ScheduledTaskInfo` displays imprecisely and is
-not the source of truth):
+minutes for the next 10 years. **It runs silently** — the task launches
+`pythonw.exe` (Python's no-console build), so no terminal window pops up
+while you're working. Output goes to `logs\watcher.log` instead.
+
+Verify the actual repetition config (the `NextRunTime` field in
+`Get-ScheduledTaskInfo` displays imprecisely and is not the source of
+truth):
 
 ```powershell
 (Get-ScheduledTask -TaskName 'ASUSeatWatcher').Triggers[0].Repetition

@@ -1,7 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectDir = Split-Path -Parent $PSScriptRoot
-$Python     = Join-Path $ProjectDir ".venv\Scripts\python.exe"
+# pythonw.exe runs without a console window, so the scheduled task fires
+# silently in the background. The watcher writes its output to
+# logs\watcher.log instead of stdout, so nothing is lost.
+$Python     = Join-Path $ProjectDir ".venv\Scripts\pythonw.exe"
 $Script     = Join-Path $ProjectDir "src\watcher.py"
 $ConfigPath = Join-Path $ProjectDir "config.json"
 
