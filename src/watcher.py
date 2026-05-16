@@ -75,6 +75,7 @@ def _process_watch(
         return 2, []
     class_numbers = [str(c) for c in (watch.get("class_numbers") or [])]
     exclude = {str(c) for c in (watch.get("exclude_class_numbers") or [])}
+    low_threshold = int(cfg.get("low_seat_threshold", 5))
 
     try:
         api_json = scraper.fetch_url(url, cfg, watch_class_numbers=class_numbers)
@@ -139,6 +140,14 @@ def _process_watch(
             if not dry_run:
                 notifier.scraper_broken_alert(reason, watch_name=name)
 
+        # Alert rules (per class, per run):
+        #   1. If the open count changed since last run -> 🚨 seat change.
+        #      Naturally fires on first-open (0 -> N) and first-close (N -> 0).
+        #   2. Else, if 0 < curr <= threshold -> 🟡 low-seats reminder, every
+        #      run, so a missed first ping doesn't cost the seat.
+        #   3. Else (curr > threshold, or stably 0) -> silent.
+        # First observation has no prev; it can't trigger a "change" but a
+        # low-seats reminder still applies.
         sent_change = False
         if prev is None:
             log.info("[%s] first observation: %s open=%s total=%s", name, c, curr, total)
@@ -155,11 +164,11 @@ def _process_watch(
         else:
             log.info("[%s] no change: class %s open=%s total=%s", name, c, curr, total)
 
-        if curr > 0 and not sent_change:
+        if not sent_change and 0 < curr <= low_threshold:
             if not dry_run:
-                notifier.seats_open_alert(name, c, curr, total, url)
+                notifier.low_seats_alert(name, c, curr, total, url)
             else:
-                log.info("[dry-run] would send seats_open_alert(%s, %s/%s)", c, curr, total)
+                log.info("[dry-run] would send low_seats_alert(%s, %s/%s)", c, curr, total)
 
         watch_state["classes"][c] = {
             "open": curr,

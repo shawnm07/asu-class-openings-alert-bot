@@ -45,10 +45,13 @@ def seat_change_alert(watch_name: str, class_nbr: str, old, new, total, url: str
     )
 
 
-def seats_open_alert(watch_name: str, class_nbr: str, open_count, total, url: str) -> bool:
+def low_seats_alert(watch_name: str, class_nbr: str, open_count, total, url: str) -> bool:
+    """Persistent reminder used when open count is non-zero but at or below
+    the low-seat threshold. Repeats every run while the section stays in
+    that range, so a missed first ping doesn't cost the seat."""
     return send(
-        f"🟢 <b>{watch_name} — seats OPEN</b>\n"
-        f"Class <b>{class_nbr}</b>: <b>{open_count} of {total}</b> open right now\n"
+        f"🟡 <b>{watch_name} — only {open_count} seat{'s' if open_count != 1 else ''} left</b>\n"
+        f"Class <b>{class_nbr}</b>: <b>{open_count} of {total}</b> open\n"
         f'<a href="{url}">Open registration page</a>'
     )
 

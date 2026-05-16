@@ -53,10 +53,12 @@ So the bot uses a **real browser** under the hood:
    the bot falls back to `CLAS.ENRLCAP − CLAS.ENRLTOT` (the slightly
    stale PeopleSoft snapshot).
 5. It diffs the result against `data/state.json` (the last observed
-   counts, kept separately per watch). Any change → 🚨 Telegram alert.
-   Any non-zero open count → 🟢 reminder alert (every run, until seats
-   are gone). Each alert includes the watch's name so you know which
-   course pinged.
+   counts, kept separately per watch). Any change since the last scan →
+   🚨 Telegram alert. If the count didn't change but seats are low
+   (0 < open ≤ `low_seat_threshold`, default 5) → 🟡 reminder alert.
+   Otherwise silent. Each alert includes the watch's name so you know
+   which course pinged. See [§3 Alert logic](#3-what-it-does) for the
+   full rules.
 6. State is atomically written. On Windows, a single scheduled task runs
    the bot every 15 minutes via Task Scheduler.
 
@@ -70,15 +72,33 @@ their API shape.
 
 | Trigger | Telegram alert |
 |---|---|
-| Open-seat count changed for a watched section | 🚨 *MAT 243 ASU Online — seat change. Class 41738: open seats 0 → 5 (of 80) [Open registration page]* |
-| Open seats > 0 (sent every run while seats remain, in addition to a change alert) | 🟢 *MAT 243 ASU Online — seats OPEN. Class 41738: 5 of 80 open right now [Open registration page]* |
+| Open-seat count **changed** since the previous scan (any direction — open, close, increased, decreased) | 🚨 *MAT 243 ASU Online — seat change. Class 41738: open seats 0 → 5 (of 80) [Open registration page]* |
+| No change this scan, but **0 < open ≤ `low_seat_threshold`** (default 5) | 🟡 *MAT 243 ASU Online — only 3 seats left. Class 41738: 3 of 80 open [Open registration page]* |
+| No change this scan AND **open > threshold** | (silent — you already got a 🚨 when it changed) |
+| No change this scan AND **open == 0** | (silent — you already got a 🚨 when it closed) |
 | Scraper produced an uncertain reading (API shape changed, section not found, cap moved, network failure) | ⚠️ *ASU Seat Watcher: scraper broken — \<watch name\> — \<reason\>* |
 | Daily heartbeat at a configurable hour | ✓ *ASU Seat Watcher heartbeat — MAT 243 ASU Online: 41738: 0/80 \| 46051: 0/80* |
 | Manual test (`watcher.py --force-alert`) | 🧪 test message |
 
+### Alert logic in plain English
+
+The bot tries to ping you exactly when you need to know, and *not* ping
+you when nothing has changed:
+
+- **Anything changes:** you always get one 🚨. This covers the moment a
+  seat opens (0 → N) and the moment it closes (N → 0), plus every
+  in-between movement (e.g., 73 → 74).
+- **Seats are low and unchanged:** if open count is at or below
+  `low_seat_threshold` (default 5) and didn't change this scan, you get
+  a 🟡 reminder every run, so a missed first ping doesn't cost the seat.
+- **Seats are plentiful and unchanged:** silent. If 50 seats sat at 50
+  for four hours, you don't need 16 identical alerts.
+- **Section is stably full at 0:** silent. You already got a 🚨 when it
+  closed.
+
 Every Telegram alert includes the watch's `name` so you can tell at a
-glance which course pinged you — important once you're watching more than
-one URL.
+glance which course pinged you — important once you're watching more
+than one URL.
 
 Everything is logged to `logs/watcher.log` (rotating, 5 MB × 3 backups).
 
@@ -196,6 +216,11 @@ Edit `config.json`:
 - `schedule_start_time` — clock-time the repeating trigger anchors to.
 - `heartbeat_hour_local` — hour (0-23) at which the daily ✓ heartbeat
   fires.
+- `low_seat_threshold` — *optional, defaults to 5*. When a section's open
+  count is at or below this number (but greater than 0), the bot sends a
+  🟡 reminder every run. Above this number, no reminder — only change
+  alerts. Set to 0 to disable the reminder entirely. Set higher (e.g.,
+  10) if you want louder coverage of low-but-not-imminent openings.
 
 After editing `config.json`, **always re-run `python scripts\verify.py`**
 so the bot can confirm it knows how to read each watch's response.
