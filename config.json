@@ -1,20 +1,14 @@
 {
-  "catalog_url": "https://catalog.apps.asu.edu/catalog/classes/classlist",
   "api_host_substring": "eadvs-cscc-catalog-api.apps.asu.edu",
   "api_path_substring": "search/classes",
-  "query": {
-    "campusOrOnlineSelection": "O",
-    "catalogNbr": "243",
-    "honors": "F",
-    "promod": "F",
-    "searchType": "all",
-    "session": "B",
-    "subject": "MAT",
-    "term": "2264"
-  },
-  "watch_class_numbers": ["41738", "46051"],
-  "expected_total_seats": 80,
   "schedule_interval_minutes": 15,
   "schedule_start_time": "00:00",
-  "heartbeat_hour_local": 9
+  "heartbeat_hour_local": 9,
+  "watches": [
+    {
+      "name": "MAT 243 ASU Online Session B",
+      "url": "https://catalog.apps.asu.edu/catalog/classes/classlist?campusOrOnlineSelection=O&catalogNbr=243&honors=F&promod=F&searchType=all&session=B&subject=MAT&term=2264",
+      "class_numbers": []
+    }
+  ]
 }

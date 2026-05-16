@@ -11,8 +11,10 @@ available — so you can sprint to the registration page before it's gone.
 ASU's high-demand classes routinely fill up minutes after registration
 opens, and casual F5'ing the catalog page is a losing battle. This bot:
 
+- Watches **any ASU catalog URL you paste in** — any subject, any course,
+  any term, any campus or online. Track as many URLs simultaneously as
+  you want.
 - Polls the ASU catalog **every 15 minutes**, around the clock.
-- Tracks the open-seat count for any class numbers you specify.
 - Pings you on **Telegram** the instant a seat opens, with a one-click link
   back to the registration page.
 - Re-pings you every 15 minutes while seats remain open, so a missed first
@@ -35,19 +37,24 @@ short-lived bearer token. Hitting the microservice directly returns
 
 So the bot uses a **real browser** under the hood:
 
-1. **Playwright launches headless Chromium** and loads the catalog URL with
-   your search parameters (subject, catalog number, term, session, online
-   vs in-person, etc.).
-2. The SPA fetches its bearer token and fires its XHR to
+1. **You paste a catalog URL** into `config.json` — the exact URL from
+   your browser's address bar after running an ASU catalog search. You
+   can add as many URLs as you want; each is one "watch."
+2. Every 15 minutes, **Playwright launches headless Chromium** and loads
+   each watched URL in turn.
+3. The SPA fetches its bearer token and fires its XHR to
    `eadvs-cscc-catalog-api.apps.asu.edu/.../search/classes`. The bot
    intercepts that XHR response and reads the JSON.
-3. The bot walks the JSON for records matching your watched class numbers
-   and computes open seats as `ENRLCAP − ENRLTOT` (ASU's PeopleSoft
-   convention: capacity minus currently enrolled).
-4. It diffs the result against `data/state.json` (the last observed
-   counts). Any change → 🚨 Telegram alert. Any non-zero open count →
-   🟢 reminder alert (every run, until seats are gone).
-5. State is atomically written. On Windows, a single scheduled task runs
+4. The bot walks the JSON for every class section in the search result
+   (or only the specific class numbers you specified) and computes open
+   seats as `ENRLCAP − ENRLTOT` (ASU's PeopleSoft convention: capacity
+   minus currently enrolled).
+5. It diffs the result against `data/state.json` (the last observed
+   counts, kept separately per watch). Any change → 🚨 Telegram alert.
+   Any non-zero open count → 🟢 reminder alert (every run, until seats
+   are gone). Each alert includes the watch's name so you know which
+   course pinged.
+6. State is atomically written. On Windows, a single scheduled task runs
    the bot every 15 minutes via Task Scheduler.
 
 A one-time **verification gate** (`scripts/verify.py`) opens a visible
@@ -60,11 +67,15 @@ their API shape.
 
 | Trigger | Telegram alert |
 |---|---|
-| Open-seat count changed for a watched class | 🚨 *MAT 243 seat change — Class 41738: open seats 0 → 5 (of 80) [Open registration page]* |
-| Open seats > 0 (sent every run, in addition to a change alert) | 🟢 *MAT 243 seats OPEN — Class 41738: 5 of 80 open right now [Open registration page]* |
-| Scraper produced an uncertain reading (API shape changed, class not found, cap moved, network failure) | ⚠️ *ASU Seat Watcher: scraper broken — \<reason\>* |
-| Daily heartbeat at a configurable hour | ✓ *ASU Seat Watcher heartbeat — 41738: 0/80 \| 46051: 0/80* |
+| Open-seat count changed for a watched section | 🚨 *MAT 243 ASU Online — seat change. Class 41738: open seats 0 → 5 (of 80) [Open registration page]* |
+| Open seats > 0 (sent every run while seats remain, in addition to a change alert) | 🟢 *MAT 243 ASU Online — seats OPEN. Class 41738: 5 of 80 open right now [Open registration page]* |
+| Scraper produced an uncertain reading (API shape changed, section not found, cap moved, network failure) | ⚠️ *ASU Seat Watcher: scraper broken — \<watch name\> — \<reason\>* |
+| Daily heartbeat at a configurable hour | ✓ *ASU Seat Watcher heartbeat — MAT 243 ASU Online: 41738: 0/80 \| 46051: 0/80* |
 | Manual test (`watcher.py --force-alert`) | 🧪 test message |
+
+Every Telegram alert includes the watch's `name` so you can tell at a
+glance which course pinged you — important once you're watching more than
+one URL.
 
 Everything is logged to `logs/watcher.log` (rotating, 5 MB × 3 backups).
 
@@ -127,38 +138,61 @@ You should see `True` printed and receive a Telegram message.
 
 ### Step 3 — Configure which classes to watch
 
+The bot accepts a **list of catalog URLs** to monitor. Each entry is one
+"watch." Just paste the URL from your browser's address bar after running
+the search you want — that's it.
+
 Edit `config.json`:
 
 ```json
 {
-  "query": {
-    "campusOrOnlineSelection": "O",
-    "catalogNbr": "243",
-    "honors": "F",
-    "promod": "F",
-    "searchType": "all",
-    "session": "B",
-    "subject": "MAT",
-    "term": "2264"
-  },
-  "watch_class_numbers": ["41738", "46051"],
-  "expected_total_seats": 80,
+  "api_host_substring": "eadvs-cscc-catalog-api.apps.asu.edu",
+  "api_path_substring": "search/classes",
   "schedule_interval_minutes": 15,
   "schedule_start_time": "00:00",
-  "heartbeat_hour_local": 9
+  "heartbeat_hour_local": 9,
+  "watches": [
+    {
+      "name": "MAT 243 ASU Online Session B",
+      "url": "https://catalog.apps.asu.edu/catalog/classes/classlist?campusOrOnlineSelection=O&catalogNbr=243&honors=F&promod=F&searchType=all&session=B&subject=MAT&term=2264",
+      "class_numbers": []
+    },
+    {
+      "name": "CSE 110 Tempe Fall",
+      "url": "https://catalog.apps.asu.edu/catalog/classes/classlist?campus=TEMPE&catalogNbr=110&searchType=all&subject=CSE&term=2267",
+      "class_numbers": ["12345"]
+    }
+  ]
 }
 ```
 
-- `query` — same parameters the ASU catalog URL takes. You can copy them
-  straight out of the catalog page URL after running a search.
-- `watch_class_numbers` — list of ASU class numbers as strings (the
-  5-digit IDs shown on the catalog page next to each section).
-- `expected_total_seats` — must match the cap shown on the catalog page.
-  If ASU changes the cap, you'll get a `⚠️ scraper broken` alert until
-  you update this value.
-- `schedule_interval_minutes` — how often the bot polls. 15 is a sensible
-  default; 5 is the lowest I'd recommend (you can be rate-limited at
-  more aggressive intervals).
+**Per-watch fields:**
+
+- `name` — friendly label shown in Telegram alerts. Pick anything readable.
+- `url` — the **exact URL** from the catalog page after you've run the
+  search you want. Open
+  [catalog.apps.asu.edu](https://catalog.apps.asu.edu/catalog/classes/classsearch),
+  search for the course, copy the URL from the address bar, paste it here.
+- `class_numbers` — optional. Leave `[]` to alert on **any section** the
+  search returns. Add specific 5-digit class numbers (as strings) to
+  narrow to just those sections (useful if a search returns sections you
+  don't actually want — wrong instructor, bad meeting time, etc.).
+
+**Global fields:**
+
+- `schedule_interval_minutes` — how often the bot polls. 15 is sensible;
+  5 is the lowest I'd recommend (catalog API may rate-limit at more
+  aggressive intervals).
+- `schedule_start_time` — clock-time the repeating trigger anchors to.
+- `heartbeat_hour_local` — hour (0-23) at which the daily ✓ heartbeat
+  fires.
+
+After editing `config.json`, **always re-run `python scripts\verify.py`**
+so the bot can confirm it knows how to read each watch's response.
+
+> **Adding a watch later** is the same flow: edit `config.json`, append
+> a new entry to `watches`, re-run `verify.py`. No need to restart the
+> scheduled task — the watcher script reads `config.json` fresh each run.
 
 ### Step 4 — Verify correctness (MANDATORY)
 
@@ -241,12 +275,13 @@ To remove the schedule later:
 .\scripts\unregister_schedule.ps1
 ```
 
-### Changing the watched classes later
+### Changing or adding watches later
 
-Edit `config.json -> watch_class_numbers` and `expected_total_seats`, then
-**re-run `python scripts\verify.py`** (the flag's `observed` block should
-reflect your new classes) before the next scheduled run. The scheduled task
-itself doesn't need to be re-registered.
+Edit `config.json -> watches` (append a new entry, edit a URL, narrow a
+section list, whatever you need), then **re-run `python scripts\verify.py`**
+so the bot confirms each watch's response is still readable. The scheduled
+task itself doesn't need to be re-registered — it re-reads `config.json`
+every run.
 
 ### Changing the polling interval
 

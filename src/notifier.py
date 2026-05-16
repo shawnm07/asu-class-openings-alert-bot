@@ -35,26 +35,27 @@ def send(text: str, parse_mode: str = "HTML") -> bool:
     return r.ok
 
 
-def seat_change_alert(class_nbr: str, old, new, total, url: str) -> bool:
+def seat_change_alert(watch_name: str, class_nbr: str, old, new, total, url: str) -> bool:
     return send(
-        f"🚨 <b>MAT 243 seat change</b>\n"
+        f"🚨 <b>{watch_name} — seat change</b>\n"
         f"Class <b>{class_nbr}</b>: open seats <b>{old} → {new}</b> (of {total})\n"
         f'<a href="{url}">Open registration page</a>'
     )
 
 
-def seats_open_alert(class_nbr: str, open_count, total, url: str) -> bool:
-    """Sent every run while open > 0 (and no change happened this run) so the
-    user can't miss it just because they slept through the first ping."""
+def seats_open_alert(watch_name: str, class_nbr: str, open_count, total, url: str) -> bool:
     return send(
-        f"🟢 <b>MAT 243 seats OPEN</b>\n"
+        f"🟢 <b>{watch_name} — seats OPEN</b>\n"
         f"Class <b>{class_nbr}</b>: <b>{open_count} of {total}</b> open right now\n"
         f'<a href="{url}">Open registration page</a>'
     )
 
 
-def scraper_broken_alert(reason: str) -> bool:
-    return send(f"⚠️ <b>ASU Seat Watcher: scraper broken</b>\n{reason}")
+def scraper_broken_alert(reason: str, watch_name: str | None = None) -> bool:
+    prefix = f"⚠️ <b>ASU Seat Watcher: scraper broken</b>"
+    if watch_name:
+        prefix += f" — {watch_name}"
+    return send(f"{prefix}\n{reason}")
 
 
 def heartbeat(state_summary: str) -> bool:

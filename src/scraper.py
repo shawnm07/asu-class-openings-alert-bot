@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from urllib.parse import urlencode
 
 from playwright.sync_api import sync_playwright
 
@@ -33,16 +32,19 @@ class ScraperError(Exception):
     """Raised when the scraper cannot produce a confident reading."""
 
 
-def fetch_classes(cfg: dict, headless: bool = True) -> Any:
-    """Load the catalog page and return the JSON body from the search/classes
-    XHR. The catalog host serves many endpoints — subjects dropdown, terms,
-    etc — so we filter on path, then prefer captures that contain a watched
-    class number. Raises ScraperError on failure."""
+def fetch_url(
+    url: str,
+    cfg: dict,
+    watch_class_numbers: list[str] | None = None,
+    headless: bool = True,
+) -> Any:
+    """Load the given catalog URL in headless Chromium, intercept the
+    search/classes XHR, and return its JSON. If watch_class_numbers is
+    provided, prefer captures whose body contains any of them."""
     captured: list[tuple[str, Any]] = []
-    url = cfg["catalog_url"] + "?" + urlencode(cfg["query"])
     host_substr = cfg["api_host_substring"]
     path_substr = cfg.get("api_path_substring", "search/classes")
-    watch = [str(c) for c in cfg.get("watch_class_numbers", [])]
+    watch = [str(c) for c in (watch_class_numbers or [])]
 
     log.info("Launching Chromium (headless=%s) for %s", headless, url)
 
@@ -262,38 +264,90 @@ def _extract_one(rec: dict, schema: dict, cnum: str) -> dict:
         raise ScraperError(f"unknown schema mode: {mode!r}")
 
 
+def find_all_class_records(api_json, schema: dict | None = None) -> dict[str, dict]:
+    """Return {class_nbr: record} for every dict in the payload that looks
+    like a class record — has CLASSNBR plus the schema's cap/enrolled (or
+    open/total) fields. Used when the user asks to watch 'all sections'."""
+    out: dict[str, dict] = {}
+    required_for_subtract = (PS_FIELD_CLASS_NBR, PS_FIELD_CAP, PS_FIELD_ENROLLED)
+    mode = (schema or {}).get("mode")
+    for rec in _walk(api_json):
+        if not isinstance(rec, dict):
+            continue
+        if mode == "direct":
+            f_open = schema.get("field_open")
+            f_total = schema.get("field_total")
+            cnbr_field = schema.get("field_class_nbr") or PS_FIELD_CLASS_NBR
+            if not (cnbr_field in rec and f_open in rec and f_total in rec):
+                continue
+        else:
+            if not all(f in rec for f in required_for_subtract):
+                continue
+            cnbr_field = PS_FIELD_CLASS_NBR
+        cnum = str(rec.get(cnbr_field, "")).strip()
+        if not cnum or not cnum.isdigit():
+            continue
+        if cnum not in out:
+            out[cnum] = rec
+    return out
+
+
 def extract_seats(
     api_json,
-    class_numbers: list[str],
-    total_expected: int,
+    class_numbers: list[str] | None,
     field_overrides: dict | None = None,
 ) -> dict[str, dict]:
-    """Return {class_nbr: {open, total, raw_record, fields}} for every
-    watched class.
+    """Return {class_nbr: {open, total, raw_record, fields}}.
 
-    field_overrides — a schema dict as produced by auto_detect_schema() or
-    stored in data/verified.flag. If None, auto-detection runs on the first
-    matched record.
+    If class_numbers is non-empty, only those classes are returned (and
+    missing ones raise ScraperError). If class_numbers is None or empty,
+    every class record in the payload is returned.
+
+    field_overrides — a schema dict (from data/verified.flag) or None for
+    auto-detect.
     """
-    records = _find_records(api_json, class_numbers)
-    if not records:
-        raise ScraperError(
-            f"none of the watched class numbers {class_numbers} appear in the response"
-        )
+    # First, find at least one record so we can auto-detect schema.
+    candidate_records: dict[str, dict]
+    if class_numbers:
+        candidate_records = _find_records(api_json, class_numbers)
+        if not candidate_records:
+            raise ScraperError(
+                f"none of the watched class numbers {class_numbers} appear in the response"
+            )
+    else:
+        # Need schema first to know what fields define a class record.
+        # Use the subtract default for the initial pass; the find_all
+        # helper does the right thing for both modes once schema is known.
+        candidate_records = find_all_class_records(api_json, field_overrides)
+        if not candidate_records:
+            raise ScraperError(
+                "no class records found in the response — is the URL a valid catalog search?"
+            )
 
     schema = field_overrides
     if not schema or not schema.get("mode"):
-        first_rec = next(iter(records.values()))
+        first_rec = next(iter(candidate_records.values()))
         schema = auto_detect_schema(first_rec)
         if schema is None:
             raise ScraperError(
                 "could not auto-detect a seat-count schema on the matched record"
             )
 
+    # If "watch all", redo discovery with schema-aware filter for accuracy.
+    if not class_numbers:
+        candidate_records = find_all_class_records(api_json, schema)
+
     out: dict[str, dict] = {}
-    for cnum in class_numbers:
-        rec = records.get(str(cnum))
-        if rec is None:
-            raise ScraperError(f"class {cnum} missing from response")
-        out[str(cnum)] = _extract_one(rec, schema, str(cnum))
+    if class_numbers:
+        for cnum in class_numbers:
+            rec = candidate_records.get(str(cnum))
+            if rec is None:
+                raise ScraperError(f"class {cnum} missing from response")
+            out[str(cnum)] = _extract_one(rec, schema, str(cnum))
+    else:
+        for cnum, rec in candidate_records.items():
+            try:
+                out[cnum] = _extract_one(rec, schema, cnum)
+            except ScraperError as e:
+                log.warning("skipping class %s: %s", cnum, e)
     return out
