@@ -185,41 +185,111 @@ def _pick_numeric_field(record: dict, name_hints: tuple[str, ...]) -> tuple[str 
     return None, None
 
 
-# Known PeopleSoft field names ASU's catalog API uses.
+# ASU catalog API field locations.
+# The API wraps each section as { "CLAS": {...PeopleSoft fields...}, "seatInfo": {...} }.
+# CLAS.ENRLCAP / ENRLTOT is a slightly STALE snapshot. seatInfo.ENRL_CAP /
+# ENRL_TOT is the LIVE value the catalog page actually renders. Always prefer
+# seatInfo when present.
 PS_FIELD_CLASS_NBR = "CLASSNBR"
-PS_FIELD_CAP = "ENRLCAP"
-PS_FIELD_ENROLLED = "ENRLTOT"
+PS_CLAS_KEY = "CLAS"
+PS_SEATINFO_KEY = "seatInfo"
+PS_FIELD_CAP_CLAS = "ENRLCAP"
+PS_FIELD_ENR_CLAS = "ENRLTOT"
+PS_FIELD_CAP_SEATINFO = "ENRL_CAP"
+PS_FIELD_ENR_SEATINFO = "ENRL_TOT"
 
 
-def auto_detect_schema(rec: dict) -> dict | None:
-    """Inspect one record and decide how to compute open seats. Returns a
-    schema dict suitable for extract_seats(field_overrides=...) or None."""
-    # Preferred: PeopleSoft subtract pattern (ASU catalog).
-    if PS_FIELD_CAP in rec and PS_FIELD_ENROLLED in rec:
-        cap = _coerce_int(rec.get(PS_FIELD_CAP))
-        enr = _coerce_int(rec.get(PS_FIELD_ENROLLED))
-        if cap is not None and enr is not None:
-            return {
-                "mode": "subtract",
-                "field_class_nbr": PS_FIELD_CLASS_NBR if PS_FIELD_CLASS_NBR in rec else None,
-                "field_cap": PS_FIELD_CAP,
-                "field_enrolled": PS_FIELD_ENROLLED,
-            }
-    # Fallback: any field whose name says "open".
-    open_field, open_val = _pick_numeric_field(rec, ("open",))
-    total_field, total_val = _pick_numeric_field(rec, ("cap", "enroll", "total"))
-    if open_val is not None and total_val is not None:
+def _find_class_containers(api_json) -> dict[str, dict]:
+    """Find every ASU class container — a dict with a 'CLAS' sub-dict that has
+    CLASSNBR. Returns {class_nbr: container_dict}. The container is the right
+    object to pass to _extract_one because it carries both 'CLAS' and the
+    sibling 'seatInfo'."""
+    out: dict[str, dict] = {}
+    for node in _walk(api_json):
+        if not isinstance(node, dict):
+            continue
+        clas = node.get(PS_CLAS_KEY)
+        if not isinstance(clas, dict):
+            continue
+        cnum = str(clas.get(PS_FIELD_CLASS_NBR, "")).strip()
+        if not cnum or not cnum.isdigit():
+            continue
+        if cnum not in out:
+            out[cnum] = node
+    return out
+
+
+def auto_detect_schema(container_or_rec: dict) -> dict | None:
+    """Pick a schema for a container or raw record. The 'asu_catalog' mode is
+    the only one written by current verifications; the others remain
+    supported so existing data/verified.flag files keep working."""
+    if not isinstance(container_or_rec, dict):
+        return None
+    # Container with seatInfo (best) or with a CLAS subdict (fallback inside
+    # asu_catalog mode).
+    seat = container_or_rec.get(PS_SEATINFO_KEY)
+    clas = container_or_rec.get(PS_CLAS_KEY)
+    if isinstance(seat, dict) and PS_FIELD_CAP_SEATINFO in seat and PS_FIELD_ENR_SEATINFO in seat:
+        return {"mode": "asu_catalog"}
+    if isinstance(clas, dict) and PS_FIELD_CAP_CLAS in clas and PS_FIELD_ENR_CLAS in clas:
+        return {"mode": "asu_catalog"}
+    # Legacy: a raw CLAS dict.
+    if PS_FIELD_CAP_CLAS in container_or_rec and PS_FIELD_ENR_CLAS in container_or_rec:
         return {
-            "mode": "direct",
-            "field_class_nbr": None,
-            "field_open": open_field,
-            "field_total": total_field,
+            "mode": "subtract",
+            "field_class_nbr": PS_FIELD_CLASS_NBR,
+            "field_cap": PS_FIELD_CAP_CLAS,
+            "field_enrolled": PS_FIELD_ENR_CLAS,
         }
     return None
 
 
-def _extract_one(rec: dict, schema: dict, cnum: str) -> dict:
-    mode = schema.get("mode", "direct")
+def _seat_from_container(container: dict) -> tuple[int | None, int | None, str | None]:
+    """Try seatInfo first, then CLAS. Returns (cap, enrolled, source_label)."""
+    seat = container.get(PS_SEATINFO_KEY)
+    if isinstance(seat, dict):
+        cap = _coerce_int(seat.get(PS_FIELD_CAP_SEATINFO))
+        enr = _coerce_int(seat.get(PS_FIELD_ENR_SEATINFO))
+        if cap is not None and enr is not None:
+            return cap, enr, "seatInfo"
+    clas = container.get(PS_CLAS_KEY)
+    if isinstance(clas, dict):
+        cap = _coerce_int(clas.get(PS_FIELD_CAP_CLAS))
+        enr = _coerce_int(clas.get(PS_FIELD_ENR_CLAS))
+        if cap is not None and enr is not None:
+            return cap, enr, "CLAS"
+    return None, None, None
+
+
+def _extract_one(container_or_rec: dict, schema: dict, cnum: str) -> dict:
+    mode = schema.get("mode", "asu_catalog")
+    if mode == "asu_catalog":
+        if not isinstance(container_or_rec, dict):
+            raise ScraperError(f"class {cnum}: container not a dict")
+        cap, enr, source = _seat_from_container(container_or_rec)
+        if cap is None or enr is None:
+            raise ScraperError(f"class {cnum}: no usable seat data in container")
+        open_val = cap - enr
+        if open_val < 0:
+            # Possible when waitlisted students are also counted; clamp to 0.
+            log.warning(
+                "class %s: %s reports enrolled (%s) > cap (%s); clamping open to 0",
+                cnum, source, enr, cap,
+            )
+            open_val = 0
+        return {
+            "open": open_val,
+            "total": cap,
+            "raw_record": container_or_rec,
+            "fields": {"mode": "asu_catalog", "source": source},
+        }
+
+    # Legacy paths — used by existing verified.flag files that pre-date
+    # the seatInfo discovery. They operate on a flat record (the CLAS dict).
+    rec = container_or_rec.get(PS_CLAS_KEY) if (
+        isinstance(container_or_rec, dict) and PS_CLAS_KEY in container_or_rec
+    ) else container_or_rec
+
     if mode == "subtract":
         cap_field = schema["field_cap"]
         enr_field = schema["field_enrolled"]
@@ -230,23 +300,15 @@ def _extract_one(rec: dict, schema: dict, cnum: str) -> dict:
                 f"class {cnum}: subtract mode but "
                 f"{cap_field}={rec.get(cap_field)!r}, {enr_field}={rec.get(enr_field)!r}"
             )
-        open_val = cap - enr
-        total = cap
-        if open_val < 0:
-            raise ScraperError(
-                f"class {cnum}: computed open seats negative ({cap} - {enr} = {open_val})"
-            )
         return {
-            "open": open_val,
-            "total": total,
-            "raw_record": rec,
-            "fields": {"mode": "subtract", "enrolled": enr_field, "cap": cap_field},
+            "open": max(0, cap - enr),
+            "total": cap,
+            "raw_record": container_or_rec,
+            "fields": {"mode": "subtract", "cap": cap_field, "enrolled": enr_field},
         }
-    elif mode == "direct":
+    if mode == "direct":
         f_open = schema.get("field_open")
         f_total = schema.get("field_total")
-        if not f_open or not f_total:
-            raise ScraperError(f"class {cnum}: direct mode missing field_open/field_total")
         open_val = _coerce_int(rec.get(f_open))
         total_val = _coerce_int(rec.get(f_total))
         if open_val is None or total_val is None:
@@ -257,39 +319,16 @@ def _extract_one(rec: dict, schema: dict, cnum: str) -> dict:
         return {
             "open": open_val,
             "total": total_val,
-            "raw_record": rec,
+            "raw_record": container_or_rec,
             "fields": {"mode": "direct", "open": f_open, "total": f_total},
         }
-    else:
-        raise ScraperError(f"unknown schema mode: {mode!r}")
+    raise ScraperError(f"unknown schema mode: {mode!r}")
 
 
 def find_all_class_records(api_json, schema: dict | None = None) -> dict[str, dict]:
-    """Return {class_nbr: record} for every dict in the payload that looks
-    like a class record — has CLASSNBR plus the schema's cap/enrolled (or
-    open/total) fields. Used when the user asks to watch 'all sections'."""
-    out: dict[str, dict] = {}
-    required_for_subtract = (PS_FIELD_CLASS_NBR, PS_FIELD_CAP, PS_FIELD_ENROLLED)
-    mode = (schema or {}).get("mode")
-    for rec in _walk(api_json):
-        if not isinstance(rec, dict):
-            continue
-        if mode == "direct":
-            f_open = schema.get("field_open")
-            f_total = schema.get("field_total")
-            cnbr_field = schema.get("field_class_nbr") or PS_FIELD_CLASS_NBR
-            if not (cnbr_field in rec and f_open in rec and f_total in rec):
-                continue
-        else:
-            if not all(f in rec for f in required_for_subtract):
-                continue
-            cnbr_field = PS_FIELD_CLASS_NBR
-        cnum = str(rec.get(cnbr_field, "")).strip()
-        if not cnum or not cnum.isdigit():
-            continue
-        if cnum not in out:
-            out[cnum] = rec
-    return out
+    """Return {class_nbr: container_dict} for every class section in the
+    payload. (Schema arg kept for API compatibility; not used.)"""
+    return _find_class_containers(api_json)
 
 
 def extract_seats(
@@ -300,54 +339,42 @@ def extract_seats(
     """Return {class_nbr: {open, total, raw_record, fields}}.
 
     If class_numbers is non-empty, only those classes are returned (and
-    missing ones raise ScraperError). If class_numbers is None or empty,
-    every class record in the payload is returned.
+    missing ones raise ScraperError). Otherwise every class section in the
+    payload is returned.
 
     field_overrides — a schema dict (from data/verified.flag) or None for
     auto-detect.
     """
-    # First, find at least one record so we can auto-detect schema.
-    candidate_records: dict[str, dict]
+    containers = _find_class_containers(api_json)
+    if not containers:
+        raise ScraperError(
+            "no class records found in the response — is the URL a valid catalog search?"
+        )
+
     if class_numbers:
-        candidate_records = _find_records(api_json, class_numbers)
-        if not candidate_records:
+        wanted = {str(c) for c in class_numbers}
+        missing = wanted - containers.keys()
+        if missing:
             raise ScraperError(
-                f"none of the watched class numbers {class_numbers} appear in the response"
+                f"these watched class numbers are missing from the response: {sorted(missing)}"
             )
+        candidates = {c: containers[c] for c in wanted}
     else:
-        # Need schema first to know what fields define a class record.
-        # Use the subtract default for the initial pass; the find_all
-        # helper does the right thing for both modes once schema is known.
-        candidate_records = find_all_class_records(api_json, field_overrides)
-        if not candidate_records:
-            raise ScraperError(
-                "no class records found in the response — is the URL a valid catalog search?"
-            )
+        candidates = containers
 
     schema = field_overrides
     if not schema or not schema.get("mode"):
-        first_rec = next(iter(candidate_records.values()))
-        schema = auto_detect_schema(first_rec)
+        first = next(iter(candidates.values()))
+        schema = auto_detect_schema(first)
         if schema is None:
-            raise ScraperError(
-                "could not auto-detect a seat-count schema on the matched record"
-            )
-
-    # If "watch all", redo discovery with schema-aware filter for accuracy.
-    if not class_numbers:
-        candidate_records = find_all_class_records(api_json, schema)
+            raise ScraperError("could not auto-detect a seat-count schema")
 
     out: dict[str, dict] = {}
-    if class_numbers:
-        for cnum in class_numbers:
-            rec = candidate_records.get(str(cnum))
-            if rec is None:
-                raise ScraperError(f"class {cnum} missing from response")
-            out[str(cnum)] = _extract_one(rec, schema, str(cnum))
-    else:
-        for cnum, rec in candidate_records.items():
-            try:
-                out[cnum] = _extract_one(rec, schema, cnum)
-            except ScraperError as e:
-                log.warning("skipping class %s: %s", cnum, e)
+    for cnum, container in candidates.items():
+        try:
+            out[cnum] = _extract_one(container, schema, cnum)
+        except ScraperError as e:
+            if class_numbers:
+                raise
+            log.warning("skipping class %s: %s", cnum, e)
     return out

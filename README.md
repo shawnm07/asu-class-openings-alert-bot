@@ -155,12 +155,14 @@ Edit `config.json`:
     {
       "name": "MAT 243 ASU Online Session B",
       "url": "https://catalog.apps.asu.edu/catalog/classes/classlist?campusOrOnlineSelection=O&catalogNbr=243&honors=F&promod=F&searchType=all&session=B&subject=MAT&term=2264",
-      "class_numbers": []
+      "class_numbers": [],
+      "exclude_class_numbers": []
     },
     {
       "name": "CSE 110 Tempe Fall",
       "url": "https://catalog.apps.asu.edu/catalog/classes/classlist?campus=TEMPE&catalogNbr=110&searchType=all&subject=CSE&term=2267",
-      "class_numbers": ["12345"]
+      "class_numbers": [],
+      "exclude_class_numbers": ["12345", "67890"]
     }
   ]
 }
@@ -177,6 +179,11 @@ Edit `config.json`:
   search returns. Add specific 5-digit class numbers (as strings) to
   narrow to just those sections (useful if a search returns sections you
   don't actually want — wrong instructor, bad meeting time, etc.).
+- `exclude_class_numbers` — optional blocklist. 5-digit class numbers
+  listed here are **ignored** by the watcher — no alerts, no state diff,
+  not even shown during verification. Use this when a search returns a
+  section you specifically don't want (e.g., the one with the bad
+  professor). Takes effect immediately after re-running verify.
 
 **Global fields:**
 

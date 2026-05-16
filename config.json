@@ -8,7 +8,14 @@
     {
       "name": "MAT 243 ASU Online Session B",
       "url": "https://catalog.apps.asu.edu/catalog/classes/classlist?campusOrOnlineSelection=O&catalogNbr=243&honors=F&promod=F&searchType=all&session=B&subject=MAT&term=2264",
-      "class_numbers": []
+      "class_numbers": [],
+      "exclude_class_numbers": []
+    },
+    {
+      "name": "CSE 230 ASU Online Summer",
+      "url": "https://catalog.apps.asu.edu/catalog/classes/classlist?campus=ASUONLINE&campusOrOnlineSelection=O&catalogNbr=230&honors=F&promod=F&searchType=all&session=&subject=CSE&term=2264",
+      "class_numbers": [],
+      "exclude_class_numbers": []
     }
   ]
 }

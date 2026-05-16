@@ -36,6 +36,11 @@ def _prompt(msg: str) -> str:
 
 def _describe_schema(schema: dict) -> str:
     mode = schema.get("mode")
+    if mode == "asu_catalog":
+        return (
+            "mode=asu_catalog  open = seatInfo.ENRL_CAP - seatInfo.ENRL_TOT "
+            "(falls back to CLAS.ENRLCAP - CLAS.ENRLTOT)"
+        )
     if mode == "subtract":
         return (
             f"mode=subtract  open = {schema['field_cap']} - {schema['field_enrolled']}, "
@@ -54,6 +59,7 @@ def _verify_one_watch(watch: dict, cfg: dict, snapshots: dict) -> tuple[dict | N
         print(f"[!] watch {name!r} has no 'url' — skipping.")
         return None
     class_numbers = [str(c) for c in (watch.get("class_numbers") or [])]
+    exclude = {str(c) for c in (watch.get("exclude_class_numbers") or [])}
 
     print("=" * 60)
     print(f"WATCH: {name}")
@@ -62,6 +68,8 @@ def _verify_one_watch(watch: dict, cfg: dict, snapshots: dict) -> tuple[dict | N
         print(f"  Filtered to class numbers: {class_numbers}")
     else:
         print("  Watching ALL sections returned by this search.")
+    if exclude:
+        print(f"  Excluded class numbers: {sorted(exclude)}")
     print("=" * 60)
     print("Launching Chromium (non-headless)…")
 
@@ -83,6 +91,17 @@ def _verify_one_watch(watch: dict, cfg: dict, snapshots: dict) -> tuple[dict | N
         print("  No class records found.")
         return None
 
+    # Apply exclusions BEFORE the user confirms — what they confirm is what
+    # the watcher will use.
+    if exclude:
+        for c in list(parsed.keys()):
+            if c in exclude:
+                print(f"  (excluding class {c})")
+                parsed.pop(c)
+        if not parsed:
+            print("  All sections excluded. Nothing to verify.")
+            return None
+
     # Re-run with explicit schema so we can save it.
     first_rec = next(iter(parsed.values()))["raw_record"]
     schema = scraper.auto_detect_schema(first_rec)
@@ -91,6 +110,9 @@ def _verify_one_watch(watch: dict, cfg: dict, snapshots: dict) -> tuple[dict | N
         return None
 
     print(f"  Schema: {_describe_schema(schema)}")
+    src = next(iter(parsed.values()))["fields"].get("source")
+    if src:
+        print(f"  Seat-count source: {src}")
     print(f"  Sections found ({len(parsed)}):")
     for cnum, rec in sorted(parsed.items()):
         marker = "  ← FILTERED" if class_numbers and cnum in class_numbers else ""

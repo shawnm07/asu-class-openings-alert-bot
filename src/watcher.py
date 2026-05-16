@@ -74,6 +74,7 @@ def _process_watch(
             notifier.scraper_broken_alert(msg, watch_name=name)
         return 2, []
     class_numbers = [str(c) for c in (watch.get("class_numbers") or [])]
+    exclude = {str(c) for c in (watch.get("exclude_class_numbers") or [])}
 
     try:
         api_json = scraper.fetch_url(url, cfg, watch_class_numbers=class_numbers)
@@ -89,8 +90,17 @@ def _process_watch(
             notifier.scraper_broken_alert(f"unexpected: {e}", watch_name=name)
         return 2, []
 
+    # Drop excluded class numbers BEFORE any state diff or alerting.
+    if exclude:
+        dropped = [c for c in parsed if c in exclude]
+        for c in dropped:
+            log.info("[%s] excluding class %s (in exclude_class_numbers)", name, c)
+            parsed.pop(c, None)
+            # Also forget any prior state so a future "include" starts fresh.
+            state.get("watches", {}).get(name, {}).get("classes", {}).pop(c, None)
+
     if not parsed:
-        msg = f"watch {name!r}: no class records returned"
+        msg = f"watch {name!r}: no class records returned (after exclusions)"
         log.error(msg)
         if not dry_run:
             notifier.scraper_broken_alert(msg, watch_name=name)
