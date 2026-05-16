@@ -72,7 +72,7 @@ their API shape.
 
 | Trigger | Telegram alert |
 |---|---|
-| Open-seat count **changed** since the previous scan (any direction — open, close, increased, decreased) | 🚨 *MAT 243 ASU Online — seat change. Class 41738: open seats 0 → 5 (of 80) [Open registration page]* |
+| Open-seat count **changed** since the previous scan (any direction — open, close, increased, decreased) | 🚨 *MAT 243 ASU Online — **5 seats opened**. Class 41738: 5 of 80 open (was 0) [Open registration page]*  / 🚨 *MAT 243 ASU Online — **1 seat taken**. Class 41738: 4 of 80 open (was 5) [Open registration page]* |
 | No change this scan, but **0 < open ≤ `low_seat_threshold`** (default 5) | 🟡 *MAT 243 ASU Online — only 3 seats left. Class 41738: 3 of 80 open [Open registration page]* |
 | No change this scan AND **open > threshold** | (silent — you already got a 🚨 when it changed) |
 | No change this scan AND **open == 0** | (silent — you already got a 🚨 when it closed) |

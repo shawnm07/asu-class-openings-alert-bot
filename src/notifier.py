@@ -38,9 +38,14 @@ def send(text: str, parse_mode: str = "HTML") -> bool:
 
 
 def seat_change_alert(watch_name: str, class_nbr: str, old, new, total, url: str) -> bool:
+    delta = new - old
+    n = abs(delta)
+    noun = "seat" if n == 1 else "seats"
+    verb = "opened" if delta > 0 else "taken"
+    headline = f"{n} {noun} {verb}"
     return send(
-        f"🚨 <b>{watch_name} — seat change</b>\n"
-        f"Class <b>{class_nbr}</b>: open seats <b>{old} → {new}</b> (of {total})\n"
+        f"🚨 <b>{watch_name} — {headline}</b>\n"
+        f"Class <b>{class_nbr}</b>: <b>{new} of {total}</b> open (was {old})\n"
         f'<a href="{url}">Open registration page</a>'
     )
 
