@@ -46,9 +46,12 @@ So the bot uses a **real browser** under the hood:
    `eadvs-cscc-catalog-api.apps.asu.edu/.../search/classes`. The bot
    intercepts that XHR response and reads the JSON.
 4. The bot walks the JSON for every class section in the search result
-   (or only the specific class numbers you specified) and computes open
-   seats as `ENRLCAP − ENRLTOT` (ASU's PeopleSoft convention: capacity
-   minus currently enrolled).
+   (or only the specific class numbers you specified, minus anything in
+   `exclude_class_numbers`) and computes open seats as
+   `seatInfo.ENRL_CAP − seatInfo.ENRL_TOT` — the live counts the catalog
+   page itself renders. If a section doesn't carry a `seatInfo` block,
+   the bot falls back to `CLAS.ENRLCAP − CLAS.ENRLTOT` (the slightly
+   stale PeopleSoft snapshot).
 5. It diffs the result against `data/state.json` (the last observed
    counts, kept separately per watch). Any change → 🚨 Telegram alert.
    Any non-zero open count → 🟢 reminder alert (every run, until seats
